@@ -23,7 +23,7 @@ X_MAX = 5.0
 
 BATCH_SIZE = 25
 NUM_TASKS = 20
-NUM_UPDATES = 1
+NUM_UPDATES = 10
 
 AMPL_EVAL = 4
 PHASE_EVAL = 0
@@ -70,30 +70,32 @@ def train_maml(model, opt, loss):
         opt.zero_grad()
         loss_before_update = []
         loss_after_update = []
+
         for task_id in range(NUM_TASKS):
             ampl = np.random.uniform(AMPL_MIN, AMPL_MAX)
             phase = np.random.uniform(PHASE_MIN, PHASE_MAX)
-            xs, ys = generate_batch(ampl, phase, BATCH_SIZE)
 
             inner_opt = optim.Adam(model.parameters(), lr=0.001)
             inner_opt.zero_grad()
 
             with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
-                logits = fmodel(xs)  # modified `params` can also be passed as a kwarg
-                l = loss(logits, ys)  # no need to call loss.backwards()
-                diffopt.step(l)  # note that `step` must take `loss` as an argument!
-                #print(list(fmodel.parameters())[0].grad)
+                for _ in range(NUM_UPDATES):
+                    xs, ys = generate_batch(ampl, phase, BATCH_SIZE)
+                    logits = fmodel(xs)  # modified `params` can also be passed as a kwarg
+                    l = loss(logits, ys)  # no need to call loss.backwards()
+                    diffopt.step(l)  # note that `step` must take `loss` as an argument!
+                    #print(list(fmodel.parameters())[0].grad)
                 loss_before_update.append(l.item())
-                # The line above gets P[t+1] from P[t] and loss[t]. `step` also returns
-                # these new parameters, as an alternative to getting them from
-                # `fmodel.fast_params` or `fmodel.parameters()` after calling
-                # `diffopt.step`.
+                    # The line above gets P[t+1] from P[t] and loss[t]. `step` also returns
+                    # these new parameters, as an alternative to getting them from
+                    # `fmodel.fast_params` or `fmodel.parameters()` after calling
+                    # `diffopt.step`.
 
-                # At this point, or at any point in the iteration, you can take the
-                # gradient of `fmodel.parameters()` (or equivalently
-                # `fmodel.fast_params`) w.r.t. `fmodel.parameters(time=0)` (equivalently
-                # `fmodel.init_fast_params`). i.e. `fast_params` will always have
-                # `grad_fn` as an attribute, and be part of the gradient tape.
+                    # At this point, or at any point in the iteration, you can take the
+                    # gradient of `fmodel.parameters()` (or equivalently
+                    # `fmodel.fast_params`) w.r.t. `fmodel.parameters(time=0)` (equivalently
+                    # `fmodel.init_fast_params`). i.e. `fast_params` will always have
+                    # `grad_fn` as an attribute, and be part of the gradient tape.
 
                 xt, yt = generate_batch(ampl, phase, BATCH_SIZE)
                 logits = fmodel(xt)
