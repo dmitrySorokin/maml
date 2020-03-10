@@ -8,6 +8,8 @@ from matplotlib import pyplot as plt
 from copy import deepcopy
 from tqdm import trange
 from tensorboardX import SummaryWriter
+from torchviz import make_dot
+
 
 
 HIDDEN_SIZE = 40
@@ -55,31 +57,33 @@ MODEL = nn.Sequential(
 ).to(DEVICE)
 
 
+
 LOSS = nn.MSELoss()
 OPT = optim.Adam(MODEL.parameters(), lr=0.001)
 
 
 def train_maml(model, opt, loss):
+    model.train()
     n_train_iter = 70000
     losses = []
     for step_id in trange(n_train_iter):
-        outer_losses = []
-        task_losses = []
+        opt.zero_grad()
+        loss_before_update = []
+        loss_after_update = []
         for task_id in range(NUM_TASKS):
             ampl = np.random.uniform(AMPL_MIN, AMPL_MAX)
             phase = np.random.uniform(PHASE_MIN, PHASE_MAX)
             xs, ys = generate_batch(ampl, phase, BATCH_SIZE)
 
-            inner_opt = optim.SGD(model.parameters(), lr=0.001)
+            inner_opt = optim.Adam(model.parameters(), lr=0.001)
             inner_opt.zero_grad()
 
-            inner_losses = []
-            total_loss = 0
-            with higher.innerloop_ctx(model, inner_opt) as (fmodel, diffopt):
+            with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
                 logits = fmodel(xs)  # modified `params` can also be passed as a kwarg
                 l = loss(logits, ys)  # no need to call loss.backwards()
                 diffopt.step(l)  # note that `step` must take `loss` as an argument!
-                inner_losses.append(l.item())
+                #print(list(fmodel.parameters())[0].grad)
+                loss_before_update.append(l.item())
                 # The line above gets P[t+1] from P[t] and loss[t]. `step` also returns
                 # these new parameters, as an alternative to getting them from
                 # `fmodel.fast_params` or `fmodel.parameters()` after calling
@@ -93,31 +97,25 @@ def train_maml(model, opt, loss):
 
                 xt, yt = generate_batch(ampl, phase, BATCH_SIZE)
                 logits = fmodel(xt)
-                lt = loss(logits, yt)
-                total_loss += lt
+                l = loss(logits, yt)
+                l.backward()
+                loss_after_update.append(l.item())
+                #make_dot(l).render("attached", format="png")
+        #print(list(model.children())[0].weight.grad)
 
-        opt.zero_grad()
-        total_loss /= NUM_TASKS
-        total_loss.backward()
         opt.step()
+        after_loss = np.mean(loss_after_update)
+        before_loss = np.mean(loss_before_update)
 
-        outer_losses.append(total_loss.item())
+        writer.add_scalar('loss_outer', loss_after_update[-1], step_id)
+        writer.add_scalar('loss_inner', loss_before_update[-1], step_id)
 
-        task_losses.append(np.mean(inner_losses))
-
-        writer.add_scalar('loss_outer', outer_losses[-1], step_id)
-        writer.add_scalar('loss_inner', inner_losses[-1], step_id)
 
         if step_id % 100 == 0:
 
             torch.save(model, 'sin_model')
-            print('loss = outer {} : inner {}'.format(outer_losses[-1], inner_losses[-1]))
-        losses.append(np.mean(outer_losses))
-
-        x, y = generate_batch(AMPL_EVAL, PHASE_EVAL, BATCH_SIZE)
-        logits = fmodel(x)
-        l = loss(logits, y).item()
-        writer.add_scalar('true', l, step_id)
+            print('loss = outer {} : inner {}'.format(after_loss, before_loss))
+        losses.append(after_loss)
 
     return losses
 
