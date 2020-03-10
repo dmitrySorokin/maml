@@ -9,6 +9,7 @@ from copy import deepcopy
 from tqdm import trange
 from tensorboardX import SummaryWriter
 from torchviz import make_dot
+from collections import defaultdict
 
 
 
@@ -23,7 +24,7 @@ X_MAX = 5.0
 
 BATCH_SIZE = 25
 NUM_TASKS = 20
-NUM_UPDATES = 10
+NUM_UPDATES = 5
 
 AMPL_EVAL = 4
 PHASE_EVAL = 0
@@ -68,8 +69,7 @@ def train_maml(model, opt, loss):
     losses = []
     for step_id in trange(n_train_iter):
         opt.zero_grad()
-        loss_before_update = []
-        loss_after_update = []
+        loss_before_update = defaultdict(list)
 
         for task_id in range(NUM_TASKS):
             ampl = np.random.uniform(AMPL_MIN, AMPL_MAX)
@@ -79,13 +79,13 @@ def train_maml(model, opt, loss):
             inner_opt.zero_grad()
 
             with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
-                for _ in range(NUM_UPDATES):
+                for i in range(NUM_UPDATES):
                     xs, ys = generate_batch(ampl, phase, BATCH_SIZE)
                     logits = fmodel(xs)  # modified `params` can also be passed as a kwarg
                     l = loss(logits, ys)  # no need to call loss.backwards()
                     diffopt.step(l)  # note that `step` must take `loss` as an argument!
+                    loss_before_update[i].append(l.item())
                     #print(list(fmodel.parameters())[0].grad)
-                loss_before_update.append(l.item())
                     # The line above gets P[t+1] from P[t] and loss[t]. `step` also returns
                     # these new parameters, as an alternative to getting them from
                     # `fmodel.fast_params` or `fmodel.parameters()` after calling
@@ -101,23 +101,24 @@ def train_maml(model, opt, loss):
                 logits = fmodel(xt)
                 l = loss(logits, yt)
                 l.backward()
-                loss_after_update.append(l.item())
                 #make_dot(l).render("attached", format="png")
         #print(list(model.children())[0].weight.grad)
 
         opt.step()
-        after_loss = np.mean(loss_after_update)
-        before_loss = np.mean(loss_before_update)
 
-        writer.add_scalar('loss_outer', loss_after_update[-1], step_id)
-        writer.add_scalar('loss_inner', loss_before_update[-1], step_id)
+        writer.add_scalar('loss before update', np.mean(loss_before_update[0]), step_id)
+        for i in range(1, NUM_UPDATES):
+            writer.add_scalar('loss_after_{}_update'.format(i), np.mean(loss_before_update[i]), step_id)
 
 
         if step_id % 100 == 0:
-
             torch.save(model, 'sin_model')
-            print('loss = outer {} : inner {}'.format(after_loss, before_loss))
-        losses.append(after_loss)
+            print('before: ', np.mean(loss_before_update[0]), end=';')
+            for i in range(1, NUM_UPDATES):
+                print('after {}: {}'.format(i ,np.mean(loss_before_update[i])), end=', ')
+            print()
+
+        losses.append(np.mean(loss_before_update[1]))
 
     return losses
 
