@@ -24,7 +24,7 @@ X_MAX = 5.0
 
 BATCH_SIZE = 25
 NUM_TASKS = 20
-NUM_UPDATES = 5
+NUM_UPDATES = 2
 
 AMPL_EVAL = 4
 PHASE_EVAL = 0
@@ -75,7 +75,7 @@ def train_maml(model, opt, loss):
             ampl = np.random.uniform(AMPL_MIN, AMPL_MAX)
             phase = np.random.uniform(PHASE_MIN, PHASE_MAX)
 
-            inner_opt = optim.Adam(model.parameters(), lr=0.001)
+            inner_opt = optim.Adam(model.parameters(), lr=0.1)
             inner_opt.zero_grad()
 
             with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
@@ -83,7 +83,12 @@ def train_maml(model, opt, loss):
                     xs, ys = generate_batch(ampl, phase, BATCH_SIZE)
                     logits = fmodel(xs)  # modified `params` can also be passed as a kwarg
                     l = loss(logits, ys)  # no need to call loss.backwards()
-                    diffopt.step(l)  # note that `step` must take `loss` as an argument!
+
+                    grad = torch.autograd.grad(l, fmodel.fast_params)
+                    fmodel.fast_params = [w - 0.001 * g for w, g in zip(fmodel.fast_params, grad)]
+
+
+                    #diffopt.step(l)  # note that `step` must take `loss` as an argument!
                     loss_before_update[i].append(l.item())
                     #print(list(fmodel.parameters())[0].grad)
                     # The line above gets P[t+1] from P[t] and loss[t]. `step` also returns
