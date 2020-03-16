@@ -22,12 +22,15 @@ PHASE_MAX = np.pi
 X_MIN = -5.0
 X_MAX = 5.0
 
-BATCH_SIZE = 25
-NUM_TASKS = 20
-NUM_UPDATES = 2
+BATCH_SIZE = 10
+NUM_TASKS = 1000
+NUM_UPDATES = 1
+
+INNER_LR = 0.01
+META_LR = 0.001
 
 AMPL_EVAL = 4
-PHASE_EVAL = 0
+PHASE_EVAL = 3
 
 DEVICE = torch.device('cpu')
 print(DEVICE)
@@ -60,12 +63,12 @@ MODEL = nn.Sequential(
 
 
 LOSS = nn.MSELoss()
-OPT = optim.Adam(MODEL.parameters(), lr=0.001)
+OPT = optim.Adam(MODEL.parameters(), lr=META_LR)
 
 
 def train_maml(model, opt, loss):
     model.train()
-    n_train_iter = 70000
+    n_train_iter = 10000
     losses = []
     for step_id in trange(n_train_iter):
         opt.zero_grad()
@@ -75,7 +78,7 @@ def train_maml(model, opt, loss):
             ampl = np.random.uniform(AMPL_MIN, AMPL_MAX)
             phase = np.random.uniform(PHASE_MIN, PHASE_MAX)
 
-            inner_opt = optim.Adam(model.parameters(), lr=0.1)
+            inner_opt = optim.Adam(model.parameters(), lr=INNER_LR)
             inner_opt.zero_grad()
 
             with higher.innerloop_ctx(model, inner_opt, copy_initial_weights=False) as (fmodel, diffopt):
@@ -85,7 +88,7 @@ def train_maml(model, opt, loss):
                     l = loss(logits, ys)  # no need to call loss.backwards()
 
                     grad = torch.autograd.grad(l, fmodel.fast_params)
-                    fmodel.fast_params = [w - 0.001 * g for w, g in zip(fmodel.fast_params, grad)]
+                    fmodel.fast_params = [w - INNER_LR * g for w, g in zip(fmodel.fast_params, grad)]
 
 
                     #diffopt.step(l)  # note that `step` must take `loss` as an argument!
@@ -116,7 +119,7 @@ def train_maml(model, opt, loss):
             writer.add_scalar('loss_after_{}_update'.format(i), np.mean(loss_before_update[i]), step_id)
 
 
-        if step_id % 100 == 0:
+        if step_id % 500 == 0:
             torch.save(model, 'sin_model')
             print('before: ', np.mean(loss_before_update[0]), end=';')
             for i in range(1, NUM_UPDATES):
