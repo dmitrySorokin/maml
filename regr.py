@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tensorboardX import SummaryWriter
 from tqdm import trange
+import higher
 
 
 X_MIN = -5
@@ -86,13 +87,11 @@ class MAML:
         # important objects
         self.task_provider = task_provider
         self.model = model
-        self.weights = list(model.parameters())  # the maml weights we will be meta-optimising
         self.criterion = nn.MSELoss()
-        self.meta_optimiser = torch.optim.Adam(self.weights, meta_lr)
+        self.meta_opt = torch.optim.Adam(self.model.parameters(), meta_lr)
+        self.inner_opt = torch.optim.SGD(self.model.parameters(), inner_lr)
 
         # hyperparameters
-        self.inner_lr = inner_lr
-        self.meta_lr = meta_lr
         self.batch_size = batch_size
         self.inner_steps = inner_steps  # with the current design of MAML, >1 is unlikely to work well
         self.num_tasks = num_tasks
@@ -102,19 +101,19 @@ class MAML:
         self.writer = SummaryWriter('regr_logs')
 
     def inner_loop(self, xs, ys, xt, yt):
-        # reset inner model to current maml weights
-        temp_weights = [w.clone() for w in self.weights]
-
-        # perform training on data sampled from task
-        for step in range(self.inner_steps):
-            loss = self.criterion(self.model.parameterised(xs, temp_weights), ys) / self.batch_size
-
-            # compute grad and update inner loop weights
-            grad = torch.autograd.grad(loss, temp_weights)
-            temp_weights = [w - self.inner_lr * g for w, g in zip(temp_weights, grad)]
+        with higher.innerloop_ctx(
+                model,
+                self.inner_opt,
+                copy_initial_weights=False,
+                track_higher_grads=False
+        ) as (fmodel, diffopt):
+            # perform training on data sampled from task
+            for step in range(self.inner_steps):
+                loss = self.criterion(fmodel(xs), ys) / self.batch_size
+                diffopt.step(loss)
 
         # sample new data for meta-update and compute loss
-        loss = self.criterion(self.model.parameterised(xt, temp_weights), yt) / self.batch_size
+        loss = self.criterion(self.model(xt), yt) / self.batch_size
 
         return loss
 
@@ -122,19 +121,15 @@ class MAML:
         for iteration in trange(num_iterations):
 
             # compute meta loss
+            self.meta_opt.zero_grad()
             meta_loss = 0
             for i in range(self.num_tasks):
                 xs, ys = self.task_provider(i, self.batch_size)
                 xt, yt = self.task_provider(i, self.batch_size)
                 meta_loss += self.inner_loop(xs, ys, xt, yt)
 
-            # compute meta gradient of loss with respect to maml weights
-            meta_grads = torch.autograd.grad(meta_loss, self.weights)
-
-            # assign meta gradient to weights and take optimisation step
-            for w, g in zip(self.weights, meta_grads):
-                w.grad = g
-            self.meta_optimiser.step()
+            meta_loss.backward()
+            self.meta_opt.step()
 
             # log metrics
             epoch_loss = meta_loss.item() / self.num_tasks
