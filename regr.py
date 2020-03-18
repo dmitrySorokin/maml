@@ -120,7 +120,7 @@ class MAML:
                     inner_loss = self.criterion(self.model.parameterised(xs, temp_weights), ys) / self.batch_size
 
                     # compute grad and update inner loop weights
-                    grad = torch.autograd.grad(inner_loss, temp_weights)
+                    grad = torch.autograd.grad(inner_loss, temp_weights, create_graph=True)
                     temp_weights = [w - self.inner_lr * g for w, g in zip(temp_weights, grad)]
 
                 # sample new data for meta-update and compute loss
@@ -156,18 +156,12 @@ maml = MAML(
     num_tasks=NUM_TASKS
 )
 
-maml.meta_train(num_iterations=OUTER_STEPS)
+#maml.meta_train(num_iterations=OUTER_STEPS)
 
-#maml.model.load('sin_model')
+maml.model.load('sin_model')
 
 
 def eval(initial_model, optim=torch.optim.SGD):
-    """
-    trains the model on a random sine task and measures the loss curve.
-
-    for each n in num_steps_measured, records the model function after n gradient updates.
-    """
-
     # copy MAML model into a new object to preserve MAML weights during training
     model = MAMLModel().model
     model.load_state_dict(initial_model.state_dict())
@@ -175,7 +169,7 @@ def eval(initial_model, optim=torch.optim.SGD):
     optimiser = optim(model.parameters(), INNER_LR)
 
     losses = []
-    for step in range(INNER_STEPS):
+    for step in range(10):
         x, y = generate_batch(ampl=AMPL_EVAL, phase=PHASE_EVAL, size=BATCH_SIZE)
         loss = criterion(model(x), y) / BATCH_SIZE
         losses.append(loss.item())
@@ -185,24 +179,25 @@ def eval(initial_model, optim=torch.optim.SGD):
         loss.backward()
         optimiser.step()
 
-    return losses
+    return losses, model
 
 
 
-
-
-plt.plot(eval(maml.model.model), label='maml')
+figs, axis = plt.subplots(1, 2)
+losses, model = eval(maml.model.model)
+axis[1].plot(losses, label='maml')
 #plt.plot(average_losses(pretrained,       n_samples=5000, K=10), label='pretrained')
+
+x = np.linspace(X_MIN, X_MAX, 100)
+y = generate_sin(x, AMPL_EVAL, PHASE_EVAL)
+axis[0].plot(x, y)
+
+xt = torch.from_numpy(x).float().reshape([-1, 1])
+print(xt.shape)
+y = model(xt).detach().numpy()
+axis[0].plot(x, y)
+
 plt.legend()
-plt.title("Average learning trajectory for K=10, starting from initial weights")
-plt.xlabel("gradient steps taken with SGD")
+axis[1].set_title("Average learning trajectory for K=10, starting from initial weights")
+axis[1].set_xlabel("gradient steps taken with SGD")
 plt.show()
-
-
-plt.plot(eval(maml.model.model, optim=torch.optim.Adam), label='maml')
-#plt.plot(average_losses(pretrained,       n_samples=5000, K=10, optim=torch.optim.Adam), label='pretrained')
-plt.legend()
-plt.title("Average learning trajectory for K=10, starting from initial weights")
-plt.xlabel("gradient steps taken with Adam")
-plt.show()
-
